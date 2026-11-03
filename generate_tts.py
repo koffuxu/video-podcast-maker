@@ -690,7 +690,11 @@ def synth_doubao(chunks, speech_rate, output_dir, resume=False):
             continue
 
         success = False
-        for attempt in range(1, 4):
+        # 豆包 query 接口按账号有并发配额，高峰期会随机返回
+        # code=3005 ExceededConcurrentQuota。重试要够多次、退避要够长，
+        # 否则短间隔重试会连续撞上同一波配额窗口。
+        max_attempts = int(os.environ.get("VOLCENGINE_MAX_ATTEMPTS", "10"))
+        for attempt in range(1, max_attempts + 1):
             try:
                 req_id = str(uuid.uuid4())
                 payload = {
@@ -790,9 +794,11 @@ def synth_doubao(chunks, speech_rate, output_dir, resume=False):
                 success = True
                 break
             except Exception as e:
-                print(f"  ✗ Part {i + 1} failed (attempt {attempt}/3): {e}")
-                if attempt < 3:
-                    time.sleep(attempt * 2)
+                print(f"  ✗ Part {i + 1} failed (attempt {attempt}/{max_attempts}): {e}")
+                if attempt < max_attempts:
+                    # 退避 3/6/9...秒，封顶 15 秒：配额窗口通常几秒就放行，
+                    # 但要避开同一波拥塞，短退避（原来的 2s/4s）容易连续撞墙。
+                    time.sleep(min(3 * attempt, 15))
 
         if not success:
             raise RuntimeError(f"Part {i + 1} synthesis failed")
